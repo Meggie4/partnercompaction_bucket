@@ -153,6 +153,8 @@ class Version {
   class LevelFileNumIterator;
   ///////////meggie
   class LevelFileNumIteratorWithPartner;
+  ///level0 bucket
+  FileMetaData* level0_max_nvm_file_;
   ///////////meggie
   Iterator* NewConcatenatingIterator(const ReadOptions&, int level) const;
 
@@ -186,6 +188,9 @@ class Version {
   explicit Version(VersionSet* vset)
       : vset_(vset), next_(this), prev_(this), refs_(0),
         file_to_compact_(nullptr),
+        //////////////meggie
+        level0_max_nvm_file_(nullptr),
+        //////////////meggie
         file_to_compact_level_(-1),
         compaction_score_(-1),
         compaction_level_(-1) {
@@ -314,6 +319,10 @@ class VersionSet {
   void TestIterator(Iterator* iter, bool range, InternalKey start, InternalKey end, bool containsend);
   //void TestIterator(Iterator* iter);
   Iterator* GetSingleCompactionIterator(Compaction* c);
+
+  //level0 bucket
+  void GetLevel0FileMeta(std::map<char, FileMetaData*>& fmmp);
+  uint64_t BytesLevel0NVM();
   ////////////////meggie
 
   // Return the approximate offset in the database of the data for

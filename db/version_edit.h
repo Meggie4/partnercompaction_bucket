@@ -47,32 +47,26 @@ struct FileMetaData {
   InternalKey largest;        // Largest internal key served by table
 
   //////////////meggie 
+  //partner compaction
   InternalKey origin_smallest;
   InternalKey origin_largest;
   std::vector<Partner> partners;
-  // std::shared_ptr<HyperLogLog> hll;
-  // int hll_add_count;
+  
+  //level0 bucket
+  char prefix;
+  uint64_t meta_number;
+  uint64_t meta_size;
+  uint64_t meta_usage;
+  std::shared_ptr<PartnerMeta> pm;
   //////////////meggie
-  FileMetaData() : refs(0), allowed_seeks(1 << 30), file_size(0)
-    ///////////meggie
-    // hll(std::make_shared<HyperLogLog>(12)), 
-    // hll_add_count(0)
-    ///////////meggie
-    { }
-
-  // FileMetaData(const FileMetaData& f) {
-  //    if(!partners.empty()) {
-  //     DEBUG_T("copy filemeta number:%llu, ref pm %p\n", number, partners[0].pm);
-  //     partners[0].pm->Ref();
-  //   }
-  // }
-
-  // ~FileMetaData() {
-  //   if(!partners.empty()) {
-  //     DEBUG_T("delete filemeta number:%llu, unref pm %p\n", number, partners[0].pm);
-  //     partners[0].pm->Unref();
-  //   }
-  // }
+  FileMetaData() : 
+    refs(0), 
+    allowed_seeks(1 << 30), 
+    file_size(0),
+    /////////meggie
+    prefix(0)
+    /////////meggie
+  {}
 };
 
 class VersionEdit {
@@ -195,7 +189,35 @@ class VersionEdit {
 
   ///////////meggie
   void AddPartner(int level, uint64_t file, Partner& partner) {
-     updated_files_.push_back(std::make_pair(level, std::make_pair(file, partner))); 
+    updated_files_.push_back(std::make_pair(level, std::make_pair(file, partner))); 
+  }
+  void AddFile(int level, uint64_t number, uint64_t file_size, const InternalKey& smallest, 
+                  const InternalKey& largest, uint64_t meta_number, uint64_t meta_size, 
+                  uint64_t meta_usage, std::shared_ptr<PartnerMeta> pm, char prefix) {
+    DEBUG_T("add level 0 file, prefix:%c, file_number:%llu, file_size:%llu, meta_usage:%llu\n", 
+                                prefix, number, file_size, meta_usage);
+    FileMetaData f;
+    f.number = number;
+    f.file_size = file_size;
+    f.smallest = smallest;
+    f.largest = largest;
+	  f.meta_number = meta_number;
+    f.meta_size = meta_size;
+    f.meta_usage = meta_usage;
+    f.pm = pm;
+    f.prefix = prefix;
+    new_files_.push_back(std::make_pair(level, f));
+  }
+  void UpdateFile(int level, uint64_t number, uint64_t file_size, 
+                  const InternalKey& smallest, const InternalKey& largest, uint64_t meta_usage) {
+    DEBUG_T("update level 0 file, file_number:%llu\n", number);
+    FileMetaData f;
+    f.number = number;
+    f.file_size = file_size;
+    f.smallest = smallest;
+    f.largest = largest;
+    f.meta_usage = meta_usage;
+    update_level0_files_.push_back(f);               
   }
   ///////////meggie
 
@@ -228,6 +250,7 @@ class VersionEdit {
   std::vector< std::pair<int, FileMetaData> > new_files_;
   /////////meggie
   UpdatedFileSet updated_files_;
+  std::vector<FileMetaData> update_level0_files_;
   /////////meggie
 };
 

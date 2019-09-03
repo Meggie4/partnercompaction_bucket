@@ -50,6 +50,7 @@ Status BuildTable(const std::string& dbname,
     meta->smallest.DecodeFrom(iter->key());
     for (; iter->Valid(); iter->Next()) {
       Slice key = iter->key();
+      //DEBUG_T("add key to level sstable\n", key.ToString().c_str());
       meta->largest.DecodeFrom(key);
       builder->Add(key, iter->value());
 	    ////////meggie

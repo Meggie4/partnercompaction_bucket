@@ -9,6 +9,7 @@ namespace leveldb {
     //针对读取partner的情况，通过meta获取到data block以及offset， 通过table cache获取相应的数据， 传入block offset以及block size
     SinglePartnerTable::SinglePartnerTable(TableBuilder* builder, PartnerMeta* meta)
     : builder_(builder), 
+      num_in_block(0),
       meta_(meta){
     }
 
@@ -28,14 +29,22 @@ namespace leveldb {
             //（3）当一个block构造完毕，那就调用insertMeta将该block中的所有键值对的元信息插入到PartnerMeta中
             curr_blockoffset_ = block_offset;
             curr_blocksize_ = block_size;
-            queue_.push_back(key.ToString());
+            //queue_.push_back(key.ToString());
+            key_queue.push_back(key.ToString());
+            ++num_in_block;
+            meta_queue.push_back(std::make_pair(static_cast<int>(num_in_block), std::make_pair(curr_blockoffset_, curr_blocksize_)));
+            std::lock_guard<std::mutex> lck(queue_mutex);
+            meta_available_var.notify_one();
+            num_in_block = 0;
             //DEBUG_T("flush block, offset:%llu, size:%llu\n", curr_blockoffset_, curr_blocksize_);
-            insertMeta();
+            //insertMeta();
         } else {
             //DEBUG_T("data block offset is:%llu\n", block_offset);
             //block还没有构造完毕，加入到
             curr_blockoffset_ = block_offset;
-            queue_.push_back(key.ToString());
+            //queue_.push_back(key.ToString());
+            key_queue.push_back(key.ToString());
+            ++num_in_block;
         }
     }
 

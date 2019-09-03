@@ -657,6 +657,11 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
+    if (!iter->Valid()) {
+      DEBUG_T("WriteLevel0Table, iter is unvalid, %s\n", iter->status().ToString().c_str());
+    } else {
+      DEBUG_T("WriteLevel0Table, iter is valid, %s\n", iter->status().ToString().c_str());
+    }
     s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }
@@ -702,7 +707,11 @@ void DBImpl::CompactMemTable() {
   VersionEdit edit;
   Version* base = versions_->current();
   base->Ref();
-  Status s = WriteLevel0Table(imm_, &edit, base);
+  ////////////meggie
+  //Status s = WriteLevel0Table(imm_, &edit, base);
+  DEBUG_T("to flush immutable memtable to level0\n");
+  Status s = WriteLevel0TableWithBucket(imm_, &edit, base);
+  ///////////meggie
   base->Unref();
 
   if (s.ok() && shutting_down_.Acquire_Load()) {
@@ -852,9 +861,15 @@ void DBImpl::BackgroundCompaction() {
   mutex_.AssertHeld();
 
   if (imm_ != nullptr) {
+    DEBUG_T("to deal with minor compaction...\n");
+    uint64_t cm_start = env_->NowMicros();
     CompactMemTable();
+    uint64_t cm_end = env_->NowMicros();
+    DEBUG_T("compact memtable need %llu\n", cm_end - cm_start);
     return;
   }
+
+  DEBUG_T("to deal with major compaction....\n");
 
   Compaction* c;
   bool is_manual = (manual_compaction_ != nullptr);
@@ -878,10 +893,16 @@ void DBImpl::BackgroundCompaction() {
     record_timer(PICK_COMPACTION);
   }
 
+  DEBUG_T("after pick compaction\n");
+
   Status status;
   if (c == nullptr) {
     // Nothing to do
-  } else if (!is_manual && c->IsTrivialMove()) {
+  ////////meggie
+  //针对level0, 不能直接移到level1
+  //} else if (!is_manual && c->IsTrivialMove()) {
+  } else if (c->level() != 0 && !is_manual && c->IsTrivialMove()) {
+  ////////meggie
     // Move file to next level
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
@@ -1076,18 +1097,104 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
 }
 
 ////////////////meggie
+Status DBImpl::WriteLevel0TableWithBucket(MemTable* mem, VersionEdit* edit, Version* base) {
+  mutex_.AssertHeld();
+  //const uint64_t start_micros = env_->NowMicros();
+  Iterator* iter = mem->NewIterator();
+  Status s;
+  MinorCompactionState* mcompact = new MinorCompactionState();
+  {
+    mutex_.Unlock();
+    //获取前缀对应的FileMetaData;
+    std::map<char, FileMetaData*> fmmp;
+    versions_->GetLevel0FileMeta(fmmp);
+    DEBUG_T("WriteLevel0TableWithBucket, after get fmmp, size:%d\n", fmmp.size());
+    s = MinorCompaction(iter, mcompact, fmmp);
+    mutex_.Lock();
+  }
+
+  // Note that if file_size is zero, the file has been deleted and
+  // should not be added to the manifest.
+  int level = 0;
+  //update file
+  UpdateLevel0File(edit, mcompact); 
+  //cleanup
+  CleanupCompaction(mcompact);
+  return s;
+}
+
+void DBImpl::UpdateLevel0File(VersionEdit* edit, MinorCompactionState* mcompact) {
+  //DEBUG_T("update level0 file\n");
+  for(auto iter = mcompact->outputs.begin(); iter != mcompact->outputs.end(); iter++) {
+    if(iter->second.new_create)
+      edit->AddFile(0, iter->second.number, iter->second.file_size, iter->second.smallest, 
+                          iter->second.largest, iter->second.meta_number, iter->second.meta_size, 
+                          iter->second.meta_usage, iter->second.pm, iter->first);
+    else 
+      edit->UpdateFile(0, iter->second.number, iter->second.file_size, iter->second.smallest, 
+                          iter->second.largest, iter->second.meta_usage);
+  }
+}
+/*
+保证每个partnerTable对应一个线程，用于对元数据进行下刷add, 
+需要为每个线程配备2个队列，传入两个队列
+queue1, 用于插入key，和取出key，
+queue2, 包含3个属性：block_offset和block_size, 以及这个block所含key的个数 
+当一个块构造完了，就唤醒这个线程，进行处理
+*/
+struct DBImpl::SavePartnerMetaArgs {
+    DBImpl* db;
+    SinglePartnerTable* spt;
+}; 
+void DBImpl::SavePartnerMeta(void* args) {
+    SavePartnerMetaArgs* spm = reinterpret_cast<SavePartnerMetaArgs*>(args);
+    DBImpl* db = spm->db;
+    db->DealWithPartnerMeta(spm->spt);
+    delete spm;
+}
+void DBImpl::DealWithPartnerMeta(SinglePartnerTable* spt) {
+    while(!spt->bailout || !spt->meta_queue.empty()) {
+      std::unique_lock<std::mutex> job_lock(spt->queue_mutex);
+      while(!spt->bailout && spt->meta_queue.empty()){
+        spt->meta_available_var.wait(job_lock, [spt]() ->bool { return spt->meta_queue.size();});
+      }
+
+      if(spt->bailout && spt->meta_queue.empty()){
+        break;
+      }
+
+      std::pair<uint64_t, std::pair<uint64_t, uint64_t>> meta = spt->meta_queue.front();
+      spt->meta_queue.pop_front();
+      uint64_t key_size = meta.first;
+      uint64_t block_offset = meta.second.first;
+      uint64_t block_size = meta.second.second;
+      int i = 0;
+      while(i < key_size && !spt->key_queue.empty()) {
+        Slice key = spt->key_queue.front();
+        spt->key_queue.pop_front();
+        spt->meta_->Add(key, block_offset, block_size);
+        i++;
+      }
+    }
+out:
+    std::lock_guard<std::mutex> lck(spt->wait_mutex);
+    spt->finished = true;
+    spt->wait_var.notify_one();//唤醒正在等待任务完成的线程，表示有一个任务已经完成了
+}
+
 Status DBImpl::OpenPartnerTableWithLevel0(MinorCompactionState* mcompact, char prefix, FileMetaData* fm) {
   //需要在write level0时获取当前前缀对应的FileMetaData*,如果不存在，为nullptr
   uint64_t file_number;
   MinorCompactionState::Output out;
+  DEBUG_T("open prefix:%c, partner table\n", prefix);
   if(fm != nullptr) {
     out.number = fm->number;
     out.smallest = fm->smallest;
     out.largest = fm->largest;
     out.file_size = fm->file_size;
-    out.meta_number = fm->partners[0].meta_number;
-    out.meta_size = fm->partners[0].meta_size;
-    out.pm = fm->partners[0].pm;
+    out.meta_number = fm->meta_number;
+    out.meta_size = fm->meta_size;
+    out.pm = fm->pm;
     out.new_create = false;
   } else {
     mutex_.Lock();
@@ -1098,7 +1205,7 @@ Status DBImpl::OpenPartnerTableWithLevel0(MinorCompactionState* mcompact, char p
     out.largest.Clear();
     out.file_size = 0;
     out.meta_number = versions_->NewFileNumber();
-    out.meta_size = 16 << 10 << 10;
+    out.meta_size = 40 << 10 << 10;
     mutex_.Unlock();
     std::string metaFile = MapFileName(dbname_nvm_, out.meta_number);
     ArenaNVM* arena = new ArenaNVM(out.meta_size, &metaFile, false);
@@ -1113,6 +1220,11 @@ Status DBImpl::OpenPartnerTableWithLevel0(MinorCompactionState* mcompact, char p
       SinglePartnerTable* spt = new SinglePartnerTable(builder, out.pm.get());
       out.partner_table = spt;
       assert(out.partner_table != nullptr);
+      //开启meta线程
+      SavePartnerMetaArgs* spm = new SavePartnerMetaArgs();
+      spm->db = this;
+      spm->spt = spt;
+      env_->StartThread(SavePartnerMeta, spm);
   }
   mcompact->outputs.insert(std::make_pair(prefix, out));
   return s;
@@ -1136,7 +1248,7 @@ Status DBImpl::FinishPartnerTableWithLevel0(MinorCompactionState* mcompact, Iter
       iter->second.file_size = iter->second.partner_table->FileSize();
       iter->second.meta_usage = iter->second.partner_table->NVMSize();
       DEBUG_T("to print memory usage\n");
-      DEBUG_T("after finish partner table number:%llu, partner size: %llu, arena nvm need room:%zu\n",
+      DEBUG_T("after finish partner table, file number:%llu, file size: %llu, meta usage:%zu\n",
             iter->second.number, iter->second.file_size, iter->second.meta_usage);    
       delete iter->second.partner_table;
       iter->second.partner_table = nullptr;
@@ -1168,32 +1280,58 @@ void DBImpl::CleanupCompaction(MinorCompactionState* mcompact) {
     delete iter->second.outfile;
     if(iter->second.new_create)
       pending_outputs_.erase(iter->second.number);
-    delete mcompact;
   }
+  delete mcompact;
 }
 
-Status DBImpl::MinorCompaction(Iterator* iter, MinorCompactionState* mcompact) {
+Status DBImpl::MinorCompaction(Iterator* iter, MinorCompactionState* mcompact, std::map<char, FileMetaData*>& fmmp) {
   std::map<char, InternalKey> largest;
   std::map<char, InternalKey> smallest;
+  Status s;
+  DEBUG_T("start minor compaction\n");
+  iter->SeekToFirst();
   for (; iter->Valid(); iter->Next()) {
     Slice key = iter->key();
+    //DEBUG_T("iter, key:%s\n", key.ToString().c_str());
     InternalKey ikey;
     ikey.DecodeFrom(key);
     char prefix = ikey.user_key()[4];
     auto miter = mcompact->outputs.find(prefix);
     if(miter == mcompact->outputs.end()) {
       //(TODO)设置FileMetaData*
-      Status s = OpenPartnerTableWithLevel0(mcompact, prefix, nullptr);
-      DEBUG_T("after open partner table, partner number:%llu\n", mcompact->outputs[prefix].number);
+      if(fmmp.find(prefix) != fmmp.end()) 
+        s = OpenPartnerTableWithLevel0(mcompact, prefix, fmmp[prefix]);
+      else 
+        s = OpenPartnerTableWithLevel0(mcompact, prefix, nullptr);
+      //DEBUG_T("after open partner table, prefix %c, number:%llu\n", prefix, mcompact->outputs[prefix].number);
       if(!s.ok()) {
           break;
       }    
+      smallest[prefix] = ikey;
     } 
+    largest[prefix] = ikey;
+    uint64_t add_start = env_->NowMicros();
     (mcompact->outputs[prefix].partner_table)->Add(key, iter->value());
+    uint64_t add_end = env_->NowMicros();
+    DEBUG_T("level0 add need time:%d\n", add_end - add_start);
   }
-
-  status = FinishPartnerTableWithLevel0(mcompact, iter);
+  //设置数据全部添加完毕
   
+  for(auto miter = mcompact->outputs.begin(); miter != mcompact->outputs.end(); miter++){
+    //等待这个partner table对应的线程处理完毕
+    std::unique_lock<std::mutex> job_lock(miter->second.partner_table->wait_mutex);
+    miter->second.partner_table->wait_var.wait(job_lock, [miter]()->bool{return static_cast<bool>(miter->second.partner_table->finished);});
+
+    if(miter->second.new_create || internal_comparator_.Compare(smallest[miter->first], miter->second.smallest) < 0) {
+          miter->second.smallest = smallest[miter->first];
+    }
+    if(miter->second.new_create || internal_comparator_.Compare(largest[miter->first], miter->second.largest) < 0) {
+          miter->second.largest = smallest[miter->first];
+    }
+  }
+  s = FinishPartnerTableWithLevel0(mcompact, iter);
+  delete iter;
+  return s;
 }
 
 Status DBImpl::OpenPartnerTable(PartnerCompactionState* compact, int input1_index) {
@@ -2520,7 +2658,10 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       break;
     } else if (
         allow_delay &&
-        versions_->NumLevelFiles(0) >= config::kL0_SlowdownWritesTrigger) {
+        ////////////meggie
+        //versions_->NumLevelFiles(0) >= config::kL0_SlowdownWritesTrigger) {
+        versions_->BytesLevel0NVM() >= config::kL0_SlowdownWritesTrigger) {
+        ////////////meggie
       // We are getting close to hitting a hard limit on the number of
       // L0 files.  Rather than delaying a single write by several
       // seconds when we hit the hard limit, start delaying each
@@ -2540,9 +2681,14 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // one is still being compacted, so we wait.
       Log(options_.info_log, "Current memtable full; waiting...\n");
       background_work_finished_signal_.Wait();
-    } else if (versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
+    } else if (
+      ////////////meggie
+      //versions_->NumLevelFiles(0) >= config::kL0_StopWritesTrigger) {
+      versions_->BytesLevel0NVM() >= config::kL0_StopWritesTrigger) {
+      ////////////meggie
       // There are too many level-0 files.
-      Log(options_.info_log, "Too many L0 files; waiting...\n");
+      //Log(options_.info_log, "Too many L0 files; waiting...\n");
+      Log(options_.info_log, "L0 nvm bytes is too large; waiting...\n");
       background_work_finished_signal_.Wait();
     } else {
       // Attempt to switch to a new memtable and trigger compaction of old
@@ -2568,6 +2714,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       ////////////meggie
       mem_->Ref();
       force = false;   // Do not force another compaction if have room
+      DEBUG_T("immutable memtable need to flush...\n");
       MaybeScheduleCompaction();
     }
   }
@@ -2688,6 +2835,7 @@ Status DB::Open(const Options& options, const std::string& dbname,
   *dbptr = nullptr;
 
   /////////////meggie
+  DEBUG_T("to open dbimpl\n");
   DBImpl* impl = new DBImpl(options, dbname, dbname_nvm);
   /////////////meggie
   impl->mutex_.Lock();
@@ -2717,6 +2865,7 @@ Status DB::Open(const Options& options, const std::string& dbname,
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
     edit.SetLogNumber(impl->logfile_number_);
     s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
+    DEBUG_T("open, after log and apply\n");
   }
   if (s.ok()) {
     impl->DeleteObsoleteFiles();
@@ -2729,6 +2878,7 @@ Status DB::Open(const Options& options, const std::string& dbname,
   } else {
     delete impl;
   }
+  DEBUG_T("after open dbimpl\n");
   return s;
 }
 
@@ -2740,6 +2890,7 @@ Status DestroyDB(const std::string& dbname, const Options& options,const std::st
   std::vector<std::string> filenames;
   //////////////meggie
   std::vector<std::string> filenames_nvm;
+  DEBUG_T("to delete file in nvm\n");
   //////////////meggie
   //获取dbname目录下的所有文件
   Status result = env->GetChildren(dbname, &filenames);

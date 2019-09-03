@@ -85,6 +85,8 @@ class DBImpl : public DB {
   struct TraditionalCompactionArgs;
   struct PartnerCompactionArgs;
   struct MinorCompactionState;
+  //level0 bucket;
+  struct SavePartnerMetaArgs;
   /////////////meggie
   struct Writer;
 
@@ -160,7 +162,11 @@ class DBImpl : public DB {
   Status OpenPartnerTableWithLevel0(MinorCompactionState* mcompact, char prefix, FileMetaData* fm);
   Status FinishPartnerTableWithLevel0(MinorCompactionState* mcompact, Iterator* input);
   void CleanupCompaction(MinorCompactionState* mcompact);
-  Status MinorCompaction(Iterator* iter, MinorCompactionState* mcompact);
+  Status MinorCompaction(Iterator* iter, MinorCompactionState* mcompact, std::map<char, FileMetaData*>& fmmp);
+  Status WriteLevel0TableWithBucket(MemTable* mem, VersionEdit* edit, Version* base);
+  void UpdateLevel0File(VersionEdit* edit, MinorCompactionState* mcompact);
+  static void SavePartnerMeta(void* args);
+  void DealWithPartnerMeta(SinglePartnerTable* spt);
   ///////////////meggie
 
   Status OpenCompactionOutputFile(CompactionState* compact);

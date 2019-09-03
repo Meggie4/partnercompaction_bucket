@@ -349,7 +349,13 @@ static Iterator* GetFileIteratorWithPartner(void* arg,
     //DEBUG_T("file->number:%lld\n", file->number);
 		int sz = file->partners.size() + 1;
 		Iterator** list = new Iterator*[sz];
-		list[0] = cache->NewIterator(options, file->number, file->file_size);
+    //level0 bucket
+    if(file->prefix != 0){
+      DEBUG_T("level0 file get partner iterator\n");
+      list[0] = cache->NewPartnerIterator(options, file->number, file->pm.get());
+    }
+    else 
+		  list[0] = cache->NewIterator(options, file->number, file->file_size);
 		for(int i = 0; i < sz - 1; i++) {
 			// list[i + 1] = cache->NewIterator(options,
 			// 					  file->partners[i].partner_number,
@@ -881,9 +887,10 @@ class VersionSet::Builder {
   struct LevelState {
     std::set<uint64_t> deleted_files;
     FileSet* added_files;
-	///////////meggie
-	std::map<uint64_t, Partner> updated_files;
-	///////////meggie
+    ///////////meggie
+    std::map<uint64_t, Partner> updated_files;
+    std::map<uint64_t, FileMetaData*> update_level0_files;
+    ///////////meggie
   };
 
   VersionSet* vset_;
@@ -977,6 +984,13 @@ class VersionSet::Builder {
       DEBUG_T("update number:%d\n", iter->second.first);
       levels_[level].updated_files.insert(std::make_pair(iter->second.first, iter->second.second));
     }
+
+    //level0 bucket
+    for (size_t i = 0; i < edit->update_level0_files_.size(); i++) {
+      FileMetaData* f = new FileMetaData(edit->update_level0_files_[i]);
+      levels_[0].update_level0_files.insert(std::make_pair(edit->update_level0_files_[i].number, f));
+      f->refs = 1;
+    }
     /////////////meggie
   }
 
@@ -1035,7 +1049,7 @@ class VersionSet::Builder {
       // File is deleted: do nothing
 	  //////////meggie
     } else if(levels_[level].updated_files.find(f->number) != 
-			 levels_[level].updated_files.end()) {
+			                      levels_[level].updated_files.end()) {
         std::vector<FileMetaData*>* files = &v->files_[level];
         FileMetaData* fm = new FileMetaData(*f);
         fm->refs = 1;
@@ -1074,9 +1088,21 @@ class VersionSet::Builder {
           assert(vset_->icmp_.Compare((*files)[files->size()-1]->largest,
                         fm->smallest) < 0);
         }
-        files->push_back(fm);  
+        files->push_back(fm);
+    } else if(level == 0 && levels_[level].update_level0_files.find(f->number) != 
+			                      levels_[level].update_level0_files.end()) { 
+        std::vector<FileMetaData*>* files = &v->files_[level];
+        FileMetaData* update_f = levels_[level].update_level0_files[f->number];
+        update_f->meta_number = f->meta_number;
+        update_f->meta_size = f->meta_size;
+        update_f->pm = f->pm;
+        update_f->prefix = f->prefix;
+        update_f->allowed_seeks = (update_f->file_size / 16384);
+        if (update_f->allowed_seeks < 100) 
+          update_f->allowed_seeks = 100;
+        files->push_back(update_f);
+    //////////meggie
 	  } else {
-	  //////////meggie
       //if(level > 1)
       //   DEBUG_T("MaybeAddFile, smallest:%s, largest:%s\n",
       //        f->smallest.user_key().ToString().c_str(),
@@ -1394,6 +1420,23 @@ void VersionSet::Finalize(Version* v) {
   int best_level = -1;
   double best_score = -1;
 
+  /////////meggie
+  //level0 bucket
+  //获取level0中nvm索引所占空间最大的文件
+  uint64_t max_nvm_bytes;
+  FileMetaData* max_nvm_bytes_fm = nullptr;
+  for(size_t i = 0; i < v->files_[0].size(); i++) {
+    if(i == 0) {
+      max_nvm_bytes = v->files_[0][i]->meta_usage;
+      max_nvm_bytes_fm = v->files_[0][i];
+    } else if (v->files_[0][i]->meta_usage > max_nvm_bytes) {
+      max_nvm_bytes = v->files_[0][i]->meta_usage;
+      max_nvm_bytes_fm = v->files_[0][i];
+    }
+  }
+  v->level0_max_nvm_file_ = max_nvm_bytes_fm;
+  /////////meggie
+
   for (int level = 0; level < config::kNumLevels-1; level++) {
     double score;
     if (level == 0) {
@@ -1408,13 +1451,25 @@ void VersionSet::Finalize(Version* v) {
       // file size is small (perhaps because of a small write-buffer
       // setting, or very high compression ratios, or lots of
       // overwrites/deletions).
-      score = v->files_[level].size() /
-          static_cast<double>(config::kL0_CompactionTrigger);
+      //////////meggie
+      // score = v->files_[level].size() /
+      //     static_cast<double>(config::kL0_CompactionTrigger);
+      //需要重新计算score，按照什么方式呢？按照元文件的大小
+      //总共最多有9个文件，现在不能按照文件数量来确定是否触发compaction
+      //如果有一个文件对应的NVM索引大小超过了阈值40MB？还是20MB？
+      if(v->level0_max_nvm_file_ != nullptr)
+        score = v->level0_max_nvm_file_->meta_usage / 
+            static_cast<double>(config::kL0_CompactionTrigger);
+      else 
+        score = 0;
+      DEBUG_T("level %d score is %f\n", level, score);
+      /////////meggie
     } else {
       // Compute the ratio of current size to size limit.
       const uint64_t level_bytes = TotalFileSize(v->files_[level]);
       score =
           static_cast<double>(level_bytes) / MaxBytesForLevel(options_, level);
+      DEBUG_T("level %d score is %f\n", level, score);
     }
 
     if (score > best_score) {
@@ -1479,6 +1534,21 @@ const char* VersionSet::LevelSummary(LevelSummaryStorage* scratch) const {
 }
 
 ////////////////////meggie
+////level0 bucket 
+void VersionSet::GetLevel0FileMeta(std::map<char, FileMetaData*>& fmmp) {
+  const std::vector<FileMetaData*>& files = current_->files_[0];
+  for(size_t i = 0; i < files.size(); i++) {
+    fmmp.insert(std::make_pair(files[i]->prefix, files[i]));
+  }
+}
+
+uint64_t VersionSet::BytesLevel0NVM() {
+  if(current_->level0_max_nvm_file_ != nullptr) {
+    return current_->level0_max_nvm_file_->meta_usage;
+  } else {
+    return 0;
+  }
+}
 ////针对的是victim inputs没有partner的情况, 获取traditional compaction 
 void VersionSet::AddInputDeletions(VersionEdit* edit, Compaction* c, std::vector<int> tcompaction_index) {
     const std::vector<FileMetaData*>& files0 = c->inputs_[0];
@@ -1886,7 +1956,7 @@ double VersionSet::GetOverlappingRatio(Compaction* c,
 void VersionSet::GetSplitCompactions(Compaction* c, 
 						std::vector<SplitCompaction*>& t_sptcompactions,
 						std::vector<SplitCompaction*>& p_sptcompactions) {
-    assert(c->level() > 0);
+    //assert(c->level() > 0);
     std::vector<FileMetaData*>& inputs0 = c->inputs_[0];
     std::vector<FileMetaData*>& inputs1 = c->inputs_[1];
     int sz0 = inputs0.size();
@@ -2050,26 +2120,28 @@ void VersionSet::AddLiveFiles(std::set<uint64_t>* live) {
   for (Version* v = dummy_versions_.next_;
        v != &dummy_versions_;
        v = v->next_) {
-    uint64_t sstable_size = 0, partner_size = 0;
-    DEBUG_T("start addlivefiles, version%d\n", index);
+    //uint64_t sstable_size = 0, partner_size = 0;
+    //DEBUG_T("start addlivefiles, version%d\n", index);
     for (int level = 0; level < config::kNumLevels; level++) {
       const std::vector<FileMetaData*>& files = v->files_[level];
       for (size_t i = 0; i < files.size(); i++) {
         live->insert(files[i]->number);
-        sstable_size += files[i]->file_size;
+        //sstable_size += files[i]->file_size;
         /////////meggie
+        if(files[i]->prefix != 0)
+          live->insert(files[i]->meta_number);
         for(int j = 0; j < files[i]->partners.size(); j++) {
             //DEBUG_T("AddLiveFiles, partner number%d\n", 
             //        files[i]->partners[j].partner_number);
             live->insert(files[i]->partners[j].partner_number);
             live->insert(files[i]->partners[j].meta_number); 
-            partner_size += files[i]->partners[j].partner_size;
+            //partner_size += files[i]->partners[j].partner_size;
         }
         /////////meggie
       }
     }
-    DEBUG_T("in this version, SSTable size is %llu, partner_size is %llu\n", sstable_size, partner_size);
-    DEBUG_T("end addlivefiles, version%d\n", index++);
+    // DEBUG_T("in this version, SSTable size is %llu, partner_size is %llu\n", sstable_size, partner_size);
+    // DEBUG_T("end addlivefiles, version%d\n", index++);
   }
 }
 
@@ -2149,8 +2221,14 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
       if (c->level() + which == 0) {
         const std::vector<FileMetaData*>& files = c->inputs_[which];
         for (size_t i = 0; i < files.size(); i++) {
-          list[num++] = table_cache_->NewIterator(
-              options, files[i]->number, files[i]->file_size);
+          ///////////////meggie
+          if(c->level() == 0) {
+            list[num++] = table_cache_->NewPartnerIterator(
+              options, files[i]->number, files[i]->pm.get());
+          } else
+          /////////////meggie
+            list[num++] = table_cache_->NewIterator(
+                options, files[i]->number, files[i]->file_size);
         }
       } else {
         // Create concatenating iterator for the files from this level
@@ -2177,24 +2255,45 @@ Compaction* VersionSet::PickCompaction() {
   const bool seek_compaction = (current_->file_to_compact_ != nullptr);
   //const bool seek_compaction = false;
   ///////////meggie
+  
+  //因文件大小导致的compaction
+  //这里主要是配置inputs[0]
   if (size_compaction) {
     level = current_->compaction_level_;
     assert(level >= 0);
     assert(level+1 < config::kNumLevels);
     c = new Compaction(options_, level);
-
     // Pick the first file that comes after compact_pointer_[level]
-    for (size_t i = 0; i < current_->files_[level].size(); i++) {
-      FileMetaData* f = current_->files_[level][i];
-      if (compact_pointer_[level].empty() ||
-          icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
-        c->inputs_[0].push_back(f);
-        break;
+    //获取到compact_pointer_指向后一个sstable
+    ////////////meggie
+    //level0 bucket
+    if(level == 0) {
+      FileMetaData* fm = current_->level0_max_nvm_file_;
+      DEBUG_T("get inputs[0], number:%llu, smallest:%s, largest:%s\n", 
+                fm->number, fm->smallest.user_key().ToString().c_str(), 
+                fm->largest.user_key().ToString().c_str());
+      c->inputs_[0].push_back(current_->level0_max_nvm_file_);
+      DEBUG_T("level1, files like these:\n");
+      for(int m = 0; m < current_->files_[1].size(); m++) {
+        DEBUG_T("file[%d], number:%llu, smallest:%s, largest:%s\n", m,
+                current_->files_[1][m]->number, current_->files_[1][m]->smallest.user_key().ToString().c_str(), 
+                current_->files_[1][m]->largest.user_key().ToString().c_str());
       }
-    }
-    if (c->inputs_[0].empty()) {
-      // Wrap-around to the beginning of the key space
-      c->inputs_[0].push_back(current_->files_[level][0]);
+    } else {
+    ////////////meggie
+      for (size_t i = 0; i < current_->files_[level].size(); i++) {
+        FileMetaData* f = current_->files_[level][i];
+        if (compact_pointer_[level].empty() ||
+            icmp_.Compare(f->largest.Encode(), compact_pointer_[level]) > 0) {
+          c->inputs_[0].push_back(f);
+          break;
+        }
+      }
+      //从头开始循环
+      if (c->inputs_[0].empty()) {
+        // Wrap-around to the beginning of the key space
+        c->inputs_[0].push_back(current_->files_[level][0]);
+      }
     }
   } else if (seek_compaction) {
     level = current_->file_to_compact_level_;
@@ -2204,20 +2303,26 @@ Compaction* VersionSet::PickCompaction() {
     return nullptr;
   }
 
+  DEBUG_T("before set input_version\n");
   c->input_version_ = current_;
   c->input_version_->Ref();
 
   // Files in level 0 may overlap each other, so pick up all overlapping ones
-  if (level == 0) {
-    InternalKey smallest, largest;
-    GetRange(c->inputs_[0], &smallest, &largest);
-    // Note that the next call will discard the file we placed in
-    // c->inputs_[0] earlier and replace it with an overlapping set
-    // which will include the picked file.
-    current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
-    assert(!c->inputs_[0].empty());
-  }
+  ////meggie
+  // if (level == 0) {
+  //   InternalKey smallest, largest;
+  //   GetRange(c->inputs_[0], &smallest, &largest);
+  //   // Note that the next call will discard the file we placed in
+  //   // c->inputs_[0] earlier and replace it with an overlapping set
+  //   // which will include the picked file.
+  //   current_->GetOverlappingInputs(0, &smallest, &largest, &c->inputs_[0]);
+  //   assert(!c->inputs_[0].empty());
+  // }
+  //////////meggie
 
+  DEBUG_T("to get inputs[1]\n");
+
+  //这里主要配置inputs[1]
   SetupOtherInputs(c);
 
   return c;
@@ -2228,9 +2333,11 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   InternalKey smallest, largest;
   GetRange(c->inputs_[0], &smallest, &largest);
 
+  //获取与inputs[0]重叠的inputs[1]
   current_->GetOverlappingInputs(level+1, &smallest, &largest, &c->inputs_[1]);
 
   // Get entire range covered by compaction
+  // 获取当前整个compaction对应的最大范围
   InternalKey all_start, all_limit;
   GetRange2(c->inputs_[0], c->inputs_[1], &all_start, &all_limit);
 
@@ -2239,7 +2346,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   //用于在不改变level + 1的文件数目的情况下，扩展level的文件数目
   if (!c->inputs_[1].empty()) {
     std::vector<FileMetaData*> expanded0;
-    //从level中再次获取重叠的SSTable
+    //根据all_start和all_limit, 从level中再次获取重叠的SSTable
     current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);
     //获取level中涉及的sstable数目
     const int64_t inputs0_size = TotalFileSize(c->inputs_[0]);
@@ -2253,13 +2360,13 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
             ExpandedCompactionByteSizeLimit(options_)) {
       //保证最后参与的文件数目小于25
       InternalKey new_start, new_limit;
-      //获取扩展后文件的范围
+      //获取扩展后level文件的范围
       GetRange(expanded0, &new_start, &new_limit);
       std::vector<FileMetaData*> expanded1;
-      //根据扩展后的文件数目，在level + 1中获取相应的文件
+      //根据level扩展后的重叠范围，在level + 1中获取重叠的文件
       current_->GetOverlappingInputs(level+1, &new_start, &new_limit,
                                      &expanded1);
-      //如果相应的sstable数目没有改变，那就可以扩展，要不然，扩展失败
+      //如果level + 1的sstable数目没有改变，那就可以扩展，要不然，扩展失败
       if (expanded1.size() == c->inputs_[1].size()) {
         ////////////meggie
         if(level >= 1)
@@ -2274,7 +2381,7 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
             int(expanded0.size()),
             int(expanded1.size()),
             long(expanded0_size), long(inputs1_size));
-        //重新获取并设置smallest和largest
+        //重新获取并设置level中的smallest和largest
         smallest = new_start;
         largest = new_limit;
         c->inputs_[0] = expanded0;
@@ -2287,11 +2394,13 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
 
   // Compute the set of grandparent files that overlap this compaction
   // (parent == level+1; grandparent == level+2)
-  //获取level + 2和该compaction重叠错误的文件集合
+  //获取level + 2和该compaction重叠的文件集合
   if (level + 2 < config::kNumLevels) {
     current_->GetOverlappingInputs(level + 2, &all_start, &all_limit,
                                    &c->grandparents_);
   }
+
+  DEBUG_T("inputs1 size is:%d\n", c->inputs_[1].size());
 
   // Update the place where we will do the next compaction for this level.
   // We update this immediately instead of waiting for the VersionEdit
