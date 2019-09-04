@@ -15,6 +15,7 @@
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
 #include "util/debug.h"
+#include "db/dbformat.h"
 
 namespace leveldb {
 
@@ -362,6 +363,12 @@ public:
     //DEBUG_T("before partner table  iter get key\n");
 	  Slice res = meta_iter_->key();
     //DEBUG_T("partner table  iter get key\n");
+    InternalKey ikey;
+    ikey.DecodeFrom(res);
+    Slice user_key = ikey.user_key();
+    if(user_key.ToString() == "user300027621834939088") {
+      DEBUG_T("partner iter get key user300027621834939088\n");
+    }
     return res;
 	}
 	Slice value() const {

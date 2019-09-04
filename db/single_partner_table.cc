@@ -10,6 +10,8 @@ namespace leveldb {
     SinglePartnerTable::SinglePartnerTable(TableBuilder* builder, PartnerMeta* meta)
     : builder_(builder), 
       num_in_block(0),
+      bailout(false),
+      finished(false),
       meta_(meta){
     }
 
@@ -29,12 +31,23 @@ namespace leveldb {
             //（3）当一个block构造完毕，那就调用insertMeta将该block中的所有键值对的元信息插入到PartnerMeta中
             curr_blockoffset_ = block_offset;
             curr_blocksize_ = block_size;
+            //DEBUG_T("add key queue, key:%s\n", key.ToString().c_str());
             //queue_.push_back(key.ToString());
             key_queue.push_back(key.ToString());
             ++num_in_block;
+
+            InternalKey ikey;
+            ikey.DecodeFrom(key);
+            if(ikey.user_key().ToString() == "user5992145971848527930") {
+                DEBUG_T("add to queue: user5992145971848527930\n");
+            }
+            DEBUG_T("insert key %s to queue, key count:%d and notify thread\n", ikey.user_key().ToString().c_str(), static_cast<int>(num_in_block));
+
+            std::unique_lock<std::mutex> lck(queue_mutex);
             meta_queue.push_back(std::make_pair(static_cast<int>(num_in_block), std::make_pair(curr_blockoffset_, curr_blocksize_)));
-            std::lock_guard<std::mutex> lck(queue_mutex);
+            lck.unlock();
             meta_available_var.notify_one();
+            //fprintf(stderr, "-------spt meta:%p, notify queue not empty------\n", meta_);
             num_in_block = 0;
             //DEBUG_T("flush block, offset:%llu, size:%llu\n", curr_blockoffset_, curr_blocksize_);
             //insertMeta();
@@ -44,6 +57,13 @@ namespace leveldb {
             curr_blockoffset_ = block_offset;
             //queue_.push_back(key.ToString());
             key_queue.push_back(key.ToString());
+            
+            InternalKey ikey;
+            ikey.DecodeFrom(key);
+            if(ikey.user_key().ToString() == "user5992145971848527930") {
+                DEBUG_T("add to queue: user5992145971848527930\n");
+            }
+            DEBUG_T("insert key %s to queue\n", ikey.user_key().ToString().c_str());
             ++num_in_block;
         }
     }
@@ -62,8 +82,16 @@ namespace leveldb {
     Status SinglePartnerTable::Finish() {
         uint64_t block_size = 0;
         Status s = builder_->PartnerFinish(&block_size);
+        if(num_in_block == 0) {
+            return s;
+        }
         curr_blocksize_ = block_size;
-        insertMeta();
+        std::unique_lock<std::mutex> lck(queue_mutex);
+        meta_queue.push_back(std::make_pair(static_cast<int>(num_in_block), std::make_pair(curr_blockoffset_, curr_blocksize_)));
+        lck.unlock();
+        meta_available_var.notify_one();
+        DEBUG_T("insert to queue,key count:%d and notify thread\n", static_cast<int>(num_in_block));
+        //insertMeta();
         return s;
     }
 

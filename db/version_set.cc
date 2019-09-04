@@ -603,6 +603,9 @@ Status Version::Get(const ReadOptions& options,
       //            f->largest.user_key().ToString().c_str(),
       //            f->partners.size());
       //}
+      if(user_key.ToString()[4] == '3' && user_key.ToString()[5] == '0' && user_key.ToString()[6] == '0') {
+        DEBUG_T("user300 search file number:%llu\n", f->number);
+      }
       if(f->partners.size() != 0){
           bool search_partner = false;
           for(int j = f->partners.size() - 1; j >= 0; j--) {
@@ -665,10 +668,22 @@ Status Version::Get(const ReadOptions& options,
       }
 search_sstable:
       const uint64_t sstable_read_micros_start = vset_->env_->NowMicros();
-      s = vset_->table_cache_->Get(options, f->number, f->file_size,
-                                   ikey, &saver, SaveValue);
+      //////meggie
+      //level0 bucket 
+      if(level == 0) {
+        uint64_t block_offset, block_size;
+        bool find = f->pm->Get(k, &block_offset, &block_size, &s);
+        if(!find) {
+            break;
+        }
+        s = vset_->table_cache_->Get(options, f->number, 
+                    ikey, &saver, SaveValue, block_offset, block_size);
+      } else 
+      //////meggie
+        s = vset_->table_cache_->Get(options, f->number, f->file_size,
+                                    ikey, &saver, SaveValue);
       const uint64_t sstable_read_micros_need = vset_->env_->NowMicros() - sstable_read_micros_start;
-      DEBUG_T("sstable read need time:%llu\n", sstable_read_micros_need);
+      //DEBUG_T("sstable read need time:%llu\n", sstable_read_micros_need);
       ///////////meggie
 
       if (!s.ok()) {
@@ -676,6 +691,9 @@ search_sstable:
       }
       switch (saver.state) {
         case kNotFound:
+          if(user_key.ToString()[4] == '3' && user_key.ToString()[5] == '0' && user_key.ToString()[6] == '0') {
+            DEBUG_T("user300 search file number:%llu not found\n", f->number);
+          }
           break;      // Keep searching in other files
         case kFound:
           searching_found_sstable++;
@@ -1103,15 +1121,16 @@ class VersionSet::Builder {
         files->push_back(update_f);
     //////////meggie
 	  } else {
-      //if(level > 1)
-      //   DEBUG_T("MaybeAddFile, smallest:%s, largest:%s\n",
-      //        f->smallest.user_key().ToString().c_str(),
-      //        f->largest.user_key().ToString().c_str());
       std::vector<FileMetaData*>* files = &v->files_[level];
       if (level > 0 && !files->empty()) {
         // Must not overlap
-        assert(vset_->icmp_.Compare((*files)[files->size()-1]->largest,
-                                    f->smallest) < 0);
+        // if(level == 1)
+        //   fprintf(stderr, "MaybeAddFile, level:%d, number:%llu, smallest:%s, largest:%s\n",
+        //       level,
+        //       f->number,
+        //       f->smallest.user_key().ToString().c_str(),
+        //       f->largest.user_key().ToString().c_str());
+        assert(vset_->icmp_.Compare((*files)[files->size()-1]->largest, f->smallest) < 0);
       }
       f->refs++;
       files->push_back(f);
@@ -1748,6 +1767,23 @@ void VersionSet::PrintSplitCompaction(SplitCompaction* sptcompaction) {
             sptcompaction->victim_start.user_key().ToString().c_str(),
             sptcompaction->victim_end.user_key().ToString().c_str(),
             sptcompaction->containsend? 1: 0);
+}
+
+void VersionSet::PrintLevel01() {
+  fprintf(stderr, "level0 like this:\n");
+  for(int i = 0; i < current_->files_[0].size(); i++) {
+    FileMetaData* fm = current_->files_[0][i];
+    fprintf(stderr, "number:%llu, smallest:%s, largest:%s\n", fm->number, 
+            fm->smallest.user_key().ToString().c_str(),
+            fm->largest.user_key().ToString().c_str());
+  }
+  fprintf(stderr, "level1 like this:\n");
+  for(int i = 0; i < current_->files_[1].size(); i++) {
+    FileMetaData* fm = current_->files_[1][i];
+    fprintf(stderr, "number:%llu, smallest:%s, largest:%s\n", fm->number, 
+            fm->smallest.user_key().ToString().c_str(),
+            fm->largest.user_key().ToString().c_str());
+  }
 }
  
 bool VersionSet::HasPartnerInVictim(Compaction* c) {

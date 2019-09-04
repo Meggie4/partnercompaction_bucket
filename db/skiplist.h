@@ -508,6 +508,21 @@ inline void SkipList<Key,Comparator>::Iterator::SetHead(void *ptr) {
                 Node* prev[kMaxHeight];
                 Node* x = FindGreaterOrEqual(key, prev);
 
+                /////////////meggie 
+                uint32_t len;
+                const char* p = key;
+                p = GetVarint32Ptr(p, p + 5, &len);  // +5: we assume "p" is not corrupted
+                Slice sikey = Slice(p, len);
+                InternalKey ikey;
+                ikey.DecodeFrom(sikey);
+                // if(ikey.user_key().ToString() == "user3000579920756343458") {
+                //     DEBUG_T("skiplist add user3000579920756343458\n");
+                // }
+                if(ikey.user_key().ToString() == "user300027621834939088") {
+                    DEBUG_T("skiplist add user300027621834939088\n");
+                }
+                ///////////meggie
+
                 // Update sequence number before updating data
 #ifdef ENABLE_RECOVERY
                 if (arena_->nvmarena_) {
@@ -558,6 +573,11 @@ inline void SkipList<Key,Comparator>::Iterator::SetHead(void *ptr) {
                     // lead to inefficient lookups (O(n) vs O(logn)).
                     *m_height = GetMaxHeight();
                 }
+                //////////////
+                if(ikey.user_key().ToString() == "user300027621834939088") {
+                    DEBUG_T("skiplist insert success! user300027621834939088\n");
+                }
+                ///////////meggie
 #endif
             }
 

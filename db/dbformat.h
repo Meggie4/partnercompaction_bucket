@@ -33,13 +33,13 @@ static const int kNumLevels = 7;
 
 //level0 bucket
 // 当level0最大的nvm索引占据量大于12MB，触发compaction 
-static const int kL0_CompactionTrigger = 6<<10<<10;
+static const int kL0_CompactionTrigger = 4<<10<<10;
 
 // 当level0最大的nvm索引占据量大于18MB，减慢写速度
-static const int kL0_SlowdownWritesTrigger = 30<<10<<10;
+static const int kL0_SlowdownWritesTrigger = 12<<10<<10;
 
 // 当level0最大的nvm索引占据量大于24MB，停止写
-static const int kL0_StopWritesTrigger = 40<<10<<10;
+static const int kL0_StopWritesTrigger =24<<10<<10;
 
 // static const int kL0_CompactionTrigger = 2<<10<<10;
 

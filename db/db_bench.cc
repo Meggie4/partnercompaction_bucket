@@ -720,6 +720,14 @@ class Benchmark {
         method = &Benchmark::Readuniform100_30000k;
       ///////zipfian
       ////load 
+      } else if(name == Slice("loadzipfian100_100k")) {
+        entries_per_batch_ = 1000;
+        fresh_db = true;
+        method = &Benchmark::Loadzipfian100_100k;
+      } else if(name == Slice("loadzipfian100_200k")) {
+        entries_per_batch_ = 1000;
+        fresh_db = true;
+        method = &Benchmark::Loadzipfian100_200k;
       } else if(name == Slice("loadzipfian100_500k")) {
         entries_per_batch_ = 1000;
         fresh_db = true;
@@ -728,6 +736,14 @@ class Benchmark {
         entries_per_batch_ = 1000;
         fresh_db = true;
         method = &Benchmark::Loadzipfian100_1000k;
+      } else if(name == Slice("loadzipfian100_2000k")) {
+        entries_per_batch_ = 1000;
+        fresh_db = true;
+        method = &Benchmark::Loadzipfian100_2000k;
+      } else if(name == Slice("loadzipfian100_3000k")) {
+        entries_per_batch_ = 1000;
+        fresh_db = true;
+        method = &Benchmark::Loadzipfian100_3000k;
       } else if(name == Slice("loadzipfian100_5000k")) {
         entries_per_batch_ = 1000;
         fresh_db = true;
@@ -753,10 +769,18 @@ class Benchmark {
         fresh_db = true;
         method = &Benchmark::Loadzipfian100_30000k;
       //////read
+      } else if(name == Slice("readzipfian100_100k")) {
+        method = &Benchmark::Readzipfian100_100k;
+      } else if(name == Slice("readzipfian100_200k")) {
+        method = &Benchmark::Readzipfian100_200k;
       } else if(name == Slice("readzipfian100_500k")) {
         method = &Benchmark::Readzipfian100_500k;
       } else if(name == Slice("readzipfian100_1000k")) {
         method = &Benchmark::Readzipfian100_1000k;
+      } else if(name == Slice("readzipfian100_2000k")) {
+        method = &Benchmark::Readzipfian100_2000k;
+      } else if(name == Slice("readzipfian100_3000k")) {
+        method = &Benchmark::Readzipfian100_3000k;
       } else if(name == Slice("readzipfian100_5000k")) {
         method = &Benchmark::Readzipfian100_5000k;
       } else if(name == Slice("readzipfian100_10000k")) {
@@ -1363,12 +1387,28 @@ class Benchmark {
   }
   ////zipfian
   //////////load 
+  void Loadzipfian100_100k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/load_10M.txt"; 
+      CustomedWorkloadWrite(thread, fname);
+  }
+  void Loadzipfian100_200k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/load_20M.txt"; 
+      CustomedWorkloadWrite(thread, fname);
+  }
   void Loadzipfian100_500k(ThreadState* thread){
       std::string fname = "/mnt/workloads/zipfian/load_50M.txt"; 
       CustomedWorkloadWrite(thread, fname);
   }
   void Loadzipfian100_1000k(ThreadState* thread){
       std::string fname = "/mnt/workloads/zipfian/load_100M.txt"; 
+      CustomedWorkloadWrite(thread, fname);
+  }
+  void Loadzipfian100_2000k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/load_200M.txt"; 
+      CustomedWorkloadWrite(thread, fname);
+  }
+  void Loadzipfian100_3000k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/load_300M.txt"; 
       CustomedWorkloadWrite(thread, fname);
   }
   void Loadzipfian100_5000k(ThreadState* thread){
@@ -1396,12 +1436,28 @@ class Benchmark {
       CustomedWorkloadWrite(thread, fname);
   }
   ////read 
-   void Readzipfian100_500k(ThreadState* thread){
+  void Readzipfian100_100k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/read_10M.txt"; 
+      CustomedWorkloadRead(thread, fname);
+  }
+  void Readzipfian100_200k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/read_20M.txt"; 
+      CustomedWorkloadRead(thread, fname);
+  }
+  void Readzipfian100_500k(ThreadState* thread){
       std::string fname = "/mnt/workloads/zipfian/read_50M.txt"; 
       CustomedWorkloadRead(thread, fname);
   }
   void Readzipfian100_1000k(ThreadState* thread){
       std::string fname = "/mnt/workloads/zipfian/read_100M.txt"; 
+      CustomedWorkloadRead(thread, fname);
+  }
+  void Readzipfian100_2000k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/read_200M.txt"; 
+      CustomedWorkloadRead(thread, fname);
+  }
+  void Readzipfian100_3000k(ThreadState* thread){
+      std::string fname = "/mnt/workloads/zipfian/read_300M.txt"; 
       CustomedWorkloadRead(thread, fname);
   }
   void Readzipfian100_5000k(ThreadState* thread){

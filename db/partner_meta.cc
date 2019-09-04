@@ -126,6 +126,18 @@ namespace leveldb {
             const char* entry = iter_.key();
 #endif
             const char* key_ptr = GetVarint32Ptr(entry, entry + 5, &key_length);
+
+            Slice sikey = Slice(key_ptr, key_length);
+            InternalKey ikey;
+            ikey.DecodeFrom(sikey);
+            if(ikey.user_key().ToString() == "user3000579920756343458") {
+                DEBUG_T("partner meta iter user3000579920756343458\n");
+            }
+            // if(ikey.user_key().ToString() == "user300027621834939088") {
+            //     DEBUG_T("partner meta iter, user300027621834939088\n");
+            // }
+
+
             uint64_t offset, size;
             offset = DecodeFixed64(key_ptr + key_length);
             size = DecodeFixed64(key_ptr + key_length + 8); 
@@ -171,6 +183,10 @@ namespace leveldb {
        InternalKey ikey;
        ikey.DecodeFrom(key);
        Slice user_key = ikey.user_key();
+       if(user_key.ToString() == "user300027621834939088") {
+         DEBUG_T("partner meta add user300027621834939088\n");
+       }
+
 
        size_t key_size = key.size();
        const size_t encoded_len = VarintLength(key_size) + key_size + 8 + 8;
@@ -231,7 +247,7 @@ namespace leveldb {
                     *block_offset = DecodeFixed64(key_ptr + key_length);
                     *block_size = DecodeFixed64(key_ptr + key_length + 8); 
                     //DEBUG_T("offset, is %d, size:%llu\n", *block_offset, *block_size);
-                    DEBUG_T("partner meta seek need time:%llu\n", env->NowMicros() - seek_start);
+                    //DEBUG_T("partner meta seek need time:%llu\n", env->NowMicros() - seek_start);
                     return true;
                 }
                 case kTypeDeletion:

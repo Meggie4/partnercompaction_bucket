@@ -41,6 +41,52 @@ namespace leveldb {
             }
         }
     }
+
+    struct SavePartnerMetaArgs {
+        //DBImpl* db;
+        SinglePartnerTable* spt;
+    }; 
+
+    void DealWithPartnerMeta(SinglePartnerTable* spt) {
+        DEBUG_T("-----------in thread save partner meta---------\n");
+        while(!spt->bailout || !spt->meta_queue.empty()) {
+        std::unique_lock<std::mutex> job_lock(spt->queue_mutex);
+        while(!spt->bailout && spt->meta_queue.empty()){
+            spt->meta_available_var.wait(job_lock, [spt]() ->bool { return spt->meta_queue.size() || spt->bailout;});
+        }
+
+        if(spt->bailout && spt->meta_queue.empty()){
+            break;
+        }
+
+        std::pair<uint64_t, std::pair<uint64_t, uint64_t>> meta = spt->meta_queue.front();
+        spt->meta_queue.pop_front();
+        uint64_t key_size = meta.first;
+        uint64_t block_offset = meta.second.first;
+        uint64_t block_size = meta.second.second;
+        int i = 0;
+        while(i < key_size && !spt->key_queue.empty()) {
+            std::string key = spt->key_queue.front();
+            spt->key_queue.pop_front();
+            //DEBUG_T("add spt:%p, key:%s, block_offset:%llu, block_size:%llu\n", spt, key.c_str(), block_offset, block_size);
+            spt->meta_->Add(Slice(key), block_offset, block_size);
+            i++;
+        }
+        }
+    out:
+        DEBUG_T("-----------out of thread save partner meta---------\n");
+        //std::lock_guard<std::mutex> lck(spt->wait_mutex);
+        spt->finished = true;
+        spt->wait_var.notify_one();//唤醒正在等待任务完成的线程，表示有一个任务已经完成了
+    }
+
+    static void SavePartnerMeta(void* args) {
+        SavePartnerMetaArgs* spm = reinterpret_cast<SavePartnerMetaArgs*>(args);
+        //DBImpl* db = spm->db;
+        DealWithPartnerMeta(spm->spt);
+        delete spm;
+    }
+
     TEST(SinglePartnerTableTest, AddSimple) {
         InternalKeyComparator cmp(BytewiseComparator());
         Env* env = Env::Default();
@@ -65,6 +111,12 @@ namespace leveldb {
         uint64_t file_number = 1;
         TableBuilder* builder = new TableBuilder(option, file, file_number);
         SinglePartnerTable* spt = new SinglePartnerTable(builder, pm.get());
+        
+        SavePartnerMetaArgs* spm = new SavePartnerMetaArgs;
+        spm->spt = spt;
+        env->StartThread(SavePartnerMeta, spm);
+        DEBUG_T("----------start thread----------\n");
+        
         Slice value1("this is my key1");
         Slice value2("this is my key1 again");
         Slice value3("this is my key3");
@@ -82,49 +134,57 @@ namespace leveldb {
         spt->Add(lkey4.internal_key(), value4);
         spt->Add(lkey5.internal_key(), value5);
         spt->Finish();
+
+        spt->bailout = true;
+        spt->meta_available_var.notify_one();
+        std::unique_lock<std::mutex> job_lock(spt->wait_mutex);
+        DEBUG_T("-------waiting meta thread finished----------\n");
+        spt->wait_var.wait(job_lock, [spt]()->bool{return static_cast<bool>(spt->finished);});
+        DEBUG_T("thread finished...\n");
+
         uint64_t file_size = spt->FileSize();
         delete spt;
         spt = nullptr;
         DEBUG_T("after first finish, file size is %llu........\n", file_size);
         
-        builder = new TableBuilder(option, file, file_number, file_size);
-        spt = new SinglePartnerTable(builder, pm.get());
-        Slice value6("this is my key6");
-        Slice value7("this is my key7");
-        Slice value8("this is my key8");
+        // builder = new TableBuilder(option, file, file_number, file_size);
+        // spt = new SinglePartnerTable(builder, pm.get());
+        // Slice value6("this is my key6");
+        // Slice value7("this is my key7");
+        // Slice value8("this is my key8");
         LookupKey lkey6(Slice("abcdmykey6"), 0);
-        LookupKey lkey7(Slice("abcdmykey7"), 0);
-        LookupKey lkey8(Slice("abcdmykey8"), 0);
-        spt->Add(lkey6.internal_key(), value6);
-        spt->Add(lkey7.internal_key(), value7);
-        spt->Add(lkey8.internal_key(), value8);
-        spt->Finish();
-        delete spt;
-        spt = nullptr;
-        DEBUG_T("after second finish........\n");
+        // LookupKey lkey7(Slice("abcdmykey7"), 0);
+        // LookupKey lkey8(Slice("abcdmykey8"), 0);
+        // spt->Add(lkey6.internal_key(), value6);
+        // spt->Add(lkey7.internal_key(), value7);
+        // spt->Add(lkey8.internal_key(), value8);
+        // spt->Finish();
+        // delete spt;
+        // spt = nullptr;
+        // DEBUG_T("after second finish........\n");
 
         //读取数据
         //(TODO)可以把pm保存在filemetadata中，避免频繁地创建释放
         uint64_t block_offset, block_size;
-        bool find = pm->Get(lkey6, &block_offset, &block_size, &s);
+        bool find = pm->Get(lkey3, &block_offset, &block_size, &s);
         TableCache* table_cache = new TableCache(dbname, option, option.max_open_files, nvm_path);
         ReadOptions roptions;
         std::string resValue;
         Saver saver;
         saver.state = kNotFound;
         saver.ucmp = cmp.user_comparator();
-        saver.user_key = lkey6.user_key();
+        saver.user_key = lkey3.user_key();
         saver.value = &resValue;
         if(find) {
             DEBUG_T("offset is %llu, block size:%llu\n", block_offset, block_size);
-            s = table_cache->Get(roptions, file_number, lkey6.internal_key(), &saver, SaveValue, block_offset, block_size);
+            s = table_cache->Get(roptions, file_number, lkey3.internal_key(), &saver, SaveValue, block_offset, block_size);
             //pm->Unref();
-            DEBUG_T("get value6 %s\n", (*saver.value).c_str());
+            DEBUG_T("get value3 %s\n", (*saver.value).c_str());
         } else {
             DEBUG_T("cannot find key from nvm skiplist\n");
         }
 
-        DEBUG_T("after get key6......\n");
+        DEBUG_T("after get key3......\n");
 
         //迭代器
         // Iterator* iter = table_cache->NewPartnerIterator(ReadOptions(), file_number, pm);

@@ -323,6 +323,7 @@ class VersionSet {
   //level0 bucket
   void GetLevel0FileMeta(std::map<char, FileMetaData*>& fmmp);
   uint64_t BytesLevel0NVM();
+  void PrintLevel01();
   ////////////////meggie
 
   // Return the approximate offset in the database of the data for
