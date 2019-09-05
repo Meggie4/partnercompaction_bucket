@@ -26,6 +26,7 @@ namespace leveldb {
             uint64_t FileSize();
             size_t NVMSize();
             ~SinglePartnerTable();
+            
             //for meta thread
             std::list<std::string> key_queue;
             std::list<std::pair<uint64_t, std::pair<uint64_t, uint64_t>>> meta_queue;

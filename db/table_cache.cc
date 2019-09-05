@@ -135,7 +135,7 @@ Status TableCache::Get(const ReadOptions& options,
     //const uint64_t release_end = options_.env->NowMicros();
     //DEBUG_T("sstable release need time:%llu\n", release_end - internal_get_end);
   }
-  DEBUG_T("sstable get need time:%llu\n", options_.env->NowMicros() - find_table_start);
+  //DEBUG_T("sstable get need time:%llu\n", options_.env->NowMicros() - find_table_start);
   return s;
 }
 

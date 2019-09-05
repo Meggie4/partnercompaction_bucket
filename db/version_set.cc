@@ -603,9 +603,6 @@ Status Version::Get(const ReadOptions& options,
       //            f->largest.user_key().ToString().c_str(),
       //            f->partners.size());
       //}
-      if(user_key.ToString()[4] == '3' && user_key.ToString()[5] == '0' && user_key.ToString()[6] == '0') {
-        DEBUG_T("user300 search file number:%llu\n", f->number);
-      }
       if(f->partners.size() != 0){
           bool search_partner = false;
           for(int j = f->partners.size() - 1; j >= 0; j--) {
@@ -691,9 +688,6 @@ search_sstable:
       }
       switch (saver.state) {
         case kNotFound:
-          if(user_key.ToString()[4] == '3' && user_key.ToString()[5] == '0' && user_key.ToString()[6] == '0') {
-            DEBUG_T("user300 search file number:%llu not found\n", f->number);
-          }
           break;      // Keep searching in other files
         case kFound:
           searching_found_sstable++;
@@ -1580,8 +1574,7 @@ void VersionSet::AddInputDeletions(VersionEdit* edit, Compaction* c, std::vector
     } 
 
     for(int i = 0; i < tcompaction_index.size(); i++) {
-        int number  = 
-                files1[tcompaction_index[i]]->number;
+        int number  = files1[tcompaction_index[i]]->number;
         DEBUG_T("%d, ", number);
         edit->DeleteFile(level + 1, number);
     } 
@@ -1770,17 +1763,17 @@ void VersionSet::PrintSplitCompaction(SplitCompaction* sptcompaction) {
 }
 
 void VersionSet::PrintLevel01() {
-  fprintf(stderr, "level0 like this:\n");
+  DEBUG_T("level0 like this:\n");
   for(int i = 0; i < current_->files_[0].size(); i++) {
     FileMetaData* fm = current_->files_[0][i];
-    fprintf(stderr, "number:%llu, smallest:%s, largest:%s\n", fm->number, 
+    DEBUG_T("number:%llu, smallest:%s, largest:%s\n", fm->number, 
             fm->smallest.user_key().ToString().c_str(),
             fm->largest.user_key().ToString().c_str());
   }
-  fprintf(stderr, "level1 like this:\n");
+  DEBUG_T("level1 like this:\n");
   for(int i = 0; i < current_->files_[1].size(); i++) {
     FileMetaData* fm = current_->files_[1][i];
-    fprintf(stderr, "number:%llu, smallest:%s, largest:%s\n", fm->number, 
+    DEBUG_T("number:%llu, smallest:%s, largest:%s\n", fm->number, 
             fm->smallest.user_key().ToString().c_str(),
             fm->largest.user_key().ToString().c_str());
   }

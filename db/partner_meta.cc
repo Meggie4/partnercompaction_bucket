@@ -127,17 +127,6 @@ namespace leveldb {
 #endif
             const char* key_ptr = GetVarint32Ptr(entry, entry + 5, &key_length);
 
-            Slice sikey = Slice(key_ptr, key_length);
-            InternalKey ikey;
-            ikey.DecodeFrom(sikey);
-            if(ikey.user_key().ToString() == "user3000579920756343458") {
-                DEBUG_T("partner meta iter user3000579920756343458\n");
-            }
-            // if(ikey.user_key().ToString() == "user300027621834939088") {
-            //     DEBUG_T("partner meta iter, user300027621834939088\n");
-            // }
-
-
             uint64_t offset, size;
             offset = DecodeFixed64(key_ptr + key_length);
             size = DecodeFixed64(key_ptr + key_length + 8); 
@@ -180,14 +169,6 @@ namespace leveldb {
     //这里的partner number指的是0~9中， 以及data的offset以及data block的大小
     void PartnerMeta::Add(const Slice& key, uint64_t block_offset, uint64_t block_size) {
        ///存储的形式是：key_size + key + block_offset(64) + block_size(64)
-       InternalKey ikey;
-       ikey.DecodeFrom(key);
-       Slice user_key = ikey.user_key();
-       if(user_key.ToString() == "user300027621834939088") {
-         DEBUG_T("partner meta add user300027621834939088\n");
-       }
-
-
        size_t key_size = key.size();
        const size_t encoded_len = VarintLength(key_size) + key_size + 8 + 8;
        char* buf = nullptr;

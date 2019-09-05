@@ -63,7 +63,7 @@ NUMTHREAD=1
 #BENCHMARKS="loadzipfian100_100k,readzipfian100_100k"
 #BENCHMARKS="loadzipfian100_200k,readzipfian100_200k"
 #BENCHMARKS="loadzipfian100_500k,readzipfian100_500k"
-BENCHMARKS="loadzipfian100_1000k,readzipfian100_1000k"
+#BENCHMARKS="loadzipfian100_1000k,readzipfian100_1000k"
 #BENCHMARKS="loadzipfian100_5000k,readzipfian100_5000k"
 #BENCHMARKS="loadzipfian100_10000k,readzipfian100_10000k"
 #BENCHMARKS="loadzipfian100_15000k,readzipfian100_15000k"
@@ -71,7 +71,7 @@ BENCHMARKS="loadzipfian100_1000k,readzipfian100_1000k"
 #BENCHMARKS="loadzipfian100_25000k,readzipfian100_25000k"
 #BENCHMARKS="loadzipfian100_30000k,readzipfian100_30000k"
 
-#BENCHMARKS="loadzipfian100_5000k"
+BENCHMARKS="loadzipfian100_5000k"
 
 #BENCHMARKS="writezipfian100_5000k"
 #BENCHMARKS="writezipfian100_10000k"

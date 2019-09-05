@@ -657,11 +657,6 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
-    if (!iter->Valid()) {
-      DEBUG_T("WriteLevel0Table, iter is unvalid, %s\n", iter->status().ToString().c_str());
-    } else {
-      DEBUG_T("WriteLevel0Table, iter is valid, %s\n", iter->status().ToString().c_str());
-    }
     s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }
@@ -686,9 +681,6 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
 	  ///////////////meggie
     edit->AddFile(level, meta.number, meta.file_size,
                   meta.smallest, meta.largest);
-    DEBUG_T("WriteLevel0Table, AddFile, file_number:%lld, smallest:%s, largest:%s\n", 
-            meta.number, meta.smallest.user_key().ToString().c_str(), 
-            meta.largest.user_key().ToString().c_str());
 	  ///////////////meggie
   }
 
@@ -903,6 +895,7 @@ void DBImpl::BackgroundCompaction() {
   //} else if (!is_manual && c->IsTrivialMove()) {
   } else if (c->level() != 0 && !is_manual && c->IsTrivialMove()) {
   ////////meggie
+    DEBUG_T("major compaction, move to next level\n");
     // Move file to next level
     assert(c->num_input_files(0) == 1);
     FileMetaData* f = c->input(0, 0);
@@ -913,12 +906,10 @@ void DBImpl::BackgroundCompaction() {
         c->edit()->AddFile(c->level() + 1, f->number, f->file_size,
                        f->smallest, f->largest, f->origin_smallest, 
                        f->origin_largest, f->partners);
-        DEBUG_T("after addfile\n");
     } else 
         c->edit()->AddFile(c->level() + 1, f->number, f->file_size,
                        f->smallest, f->largest);
     ////////////meggie
-    DEBUG_T("before logandapply\n");
     status = versions_->LogAndApply(c->edit(), &mutex_);
     if (!status.ok()) {
       RecordBackgroundError(status);
@@ -947,7 +938,7 @@ void DBImpl::BackgroundCompaction() {
     DeleteObsoleteFiles();
   }
   delete c;
-
+  DEBUG_T("major compaction, after CompactionWork\n");
   if (status.ok()) {
     // Done
   } else if (shutting_down_.Acquire_Load()) {
@@ -1078,6 +1069,17 @@ Status DBImpl::InstallCompactionResults(CompactionState* compact) {
       compact->compaction->level() + 1,
       static_cast<long long>(compact->total_bytes));
 
+  /////////////meggie
+  //level0 bucket, 删除bucket在map<prefix, FileMetaData*>中的条目
+  if(compact->compaction->level() == 0) {
+    for (size_t i = 0; i < compact->compaction->num_input_files(0); i++) {
+      FileMetaData* fm = compact->compaction->input(0, i);
+      DEBUG_T("to delete bucket prefix:%c, number:%llu\n", fm->prefix, fm->number);
+      bucket_prefixes_.erase(fm->prefix);
+    }
+  }
+  ////////////meggie
+
   // Add compaction outputs
   compact->compaction->AddInputDeletions(compact->compaction->edit());
   const int level = compact->compaction->level();
@@ -1187,18 +1189,12 @@ void DBImpl::DealWithPartnerMeta(SinglePartnerTable* spt) {
       while(i < key_size && !spt->key_queue.empty()) {
         std::string key = spt->key_queue.front();
         spt->key_queue.pop_front();
-        InternalKey ikey;
-        ikey.DecodeFrom(key);
-        if(ikey.user_key().ToString() == "user5992145971848527930") {
-          DEBUG_T("add to partner meta: user5992145971848527930\n");
-        }
-        DEBUG_T("get key %s from queue\n", ikey.user_key().ToString().c_str());
         spt->meta_->Add(Slice(key), block_offset, block_size);
         i++;
       }
     }
 out:
-    //fprintf(stderr, "-----------spt meta:%p, out of thread save partner meta---------\n", spt->meta_);
+    DEBUG_T("-----------spt meta:%p, out of thread save partner meta---------\n", spt->meta_);
     //std::lock_guard<std::mutex> lck(spt->wait_mutex);
     spt->finished = true;
     spt->wait_var.notify_one();//唤醒正在等待任务完成的线程，表示有一个任务已经完成了
@@ -1248,7 +1244,7 @@ Status DBImpl::OpenPartnerTableWithLevel0(MinorCompactionState* mcompact, char p
       spm->db = this;
       spm->spt = spt;
       env_->StartThread(SavePartnerMeta, spm);
-      DEBUG_T("----------start thread----------\n");
+      // DEBUG_T("----------start thread----------\n");
   }
   mcompact->outputs.insert(std::make_pair(prefix, out));
   return s;
@@ -1272,7 +1268,7 @@ Status DBImpl::FinishPartnerTableWithLevel0(MinorCompactionState* mcompact, Iter
       iter->second.file_size = iter->second.partner_table->FileSize();
       iter->second.meta_usage = iter->second.partner_table->NVMSize();
       DEBUG_T("to print memory usage\n");
-      DEBUG_T("after finish partner table, file number:%llu, file size: %llu, meta usage:%zu\n",
+      DEBUG_T("after finish level0 partner table, file number:%llu, file size: %llu, meta usage:%zu\n",
             iter->second.number, iter->second.file_size, iter->second.meta_usage);    
       delete iter->second.partner_table;
       iter->second.partner_table = nullptr;
@@ -1310,7 +1306,11 @@ void DBImpl::CleanupCompaction(MinorCompactionState* mcompact) {
 
 void DBImpl::TestPMIter(Iterator* iter) {
   iter->SeekToFirst();
-  for()
+  DEBUG_T("test pm iter!\n");
+  for(; iter->Valid(); iter->Next()) {
+    DEBUG_T("key:%s, ",iter->key().ToString().c_str());
+  }
+  DEBUG_T("\n");
 }
 
 Status DBImpl::MinorCompaction(Iterator* iter, MinorCompactionState* mcompact, std::map<char, FileMetaData*>& fmmp) {
@@ -1341,9 +1341,6 @@ Status DBImpl::MinorCompaction(Iterator* iter, MinorCompactionState* mcompact, s
     largest[prefix] = ikey;
     //uint64_t add_start = env_->NowMicros();
     (mcompact->outputs[prefix].partner_table)->Add(key, iter->value());
-    if(ikey.user_key().ToString() == "user300027621834939088") {
-      DEBUG_T("add user300027621834939088 to file number:%llu\n", mcompact->outputs[prefix].number);
-    }
     //uint64_t add_end = env_->NowMicros();
     //DEBUG_T("level0 add need time:%d\n", add_end - add_start);
   }
@@ -1371,17 +1368,17 @@ Status DBImpl::MinorCompaction(Iterator* iter, MinorCompactionState* mcompact, s
       miter->second.partner_table->wait_var.wait(job_lock, [miter]()->bool{return static_cast<bool>(miter->second.partner_table->finished);});
       //fprintf(stderr, "-------spt meta:%p, meta thread finished----------\n", miter->second.partner_table->meta_);
       job_lock.unlock();
-      ////end 线程同步
+      //end 线程同步
 
       miter->second.file_size = miter->second.partner_table->FileSize();
       miter->second.meta_usage = miter->second.partner_table->NVMSize();
-      DEBUG_T("to print memory usage\n");
-      DEBUG_T("after finish partner table, file number:%llu, file size: %llu, meta usage:%zu\n",
-            miter->second.number, miter->second.file_size, miter->second.meta_usage); 
+      DEBUG_T("after finish partner table, prefix:%c file number:%llu, file size: %llu, meta usage:%zu\n",
+            miter->first, miter->second.number, miter->second.file_size, miter->second.meta_usage); 
 
-      if(miter->second.number == 9) {
-        TestPMIter(miter->second.pm->NewIterator());
-      }
+      // if(miter->second.number == 9) {
+      //   DEBUG_T("after finish partner table, to iter pm\n ");
+      //   TestPMIter(miter->second.pm->NewIterator());
+      // }
 
       if(miter->second.new_create || internal_comparator_.Compare(smallest[miter->first], miter->second.smallest) < 0) {
             miter->second.smallest = smallest[miter->first];
@@ -1403,6 +1400,8 @@ Status DBImpl::MinorCompaction(Iterator* iter, MinorCompactionState* mcompact, s
       delete miter->second.outfile;
       miter->second.outfile = nullptr;
   }
+
+  DEBUG_T("end minor compaction\n");
 
   delete iter;
   return s;
@@ -1455,6 +1454,12 @@ Status DBImpl::OpenPartnerTable(PartnerCompactionState* compact, int input1_inde
       SinglePartnerTable* spt = new SinglePartnerTable(builder, compact->pm.get());
       compact->partner_table = spt;
       assert(compact->partner_table != nullptr);
+      //开启meta线程
+      SavePartnerMetaArgs* spm = new SavePartnerMetaArgs;
+      spm->db = this;
+      spm->spt = spt;
+      env_->StartThread(SavePartnerMeta, spm);
+      DEBUG_T("----------start thread----------\n");
     }
   return s;
 } 
@@ -1475,6 +1480,15 @@ Status DBImpl::FinishPartnerTable(PartnerCompactionState* compact, Iterator* inp
   } else {
     compact->partner_table->Abandon();
   }
+
+  /////线程同步
+  compact->partner_table->bailout = true;
+  compact->partner_table->meta_available_var.notify_one();
+  std::unique_lock<std::mutex> job_lock(compact->partner_table->wait_mutex);
+  compact->partner_table->wait_var.wait(job_lock, [compact]()->bool{return static_cast<bool>(compact->partner_table->finished);});
+  job_lock.unlock();
+  ////end 线程同步
+
   const uint64_t current_bytes = compact->partner_table->FileSize();
   compact->curr_file_size = current_bytes;
   
@@ -1955,18 +1969,7 @@ void DBImpl::DealWithPartnerCompaction(PartnerCompactionState* compact,
     }
    
     DEBUG_T("after finish iter input, add entries:%llu\n", entries);
-    if((*status).ok()) {
-      DEBUG_T("status is ok\n");
-    } else {
-      DEBUG_T("status is not ok:%s\n", (*status).ToString().c_str());
-    }
 
-    if(compact->partner_table != nullptr) {
-      DEBUG_T("compact->partner_table is not nullptr\n");
-    } else {
-      DEBUG_T("compact->partner_table is nullptr\n");
-    }
-  
     if((*status).ok() && compact->partner_table != nullptr) {
        DEBUG_T("before finish partner table, this_smallest user key is %s, this_largest user key is:%s\n", 
               this_smallest.user_key().ToString().c_str(), 
@@ -2184,7 +2187,6 @@ Status DBImpl::DoSplitCompactionWork(Compaction* c) {
      delete pcargs_set[i];
   }
 
-  DEBUG_T("after set status\n");
   VersionEdit edit;
   if(tstatus.ok() && pstatus.ok()) {
     versions_->AddInputDeletions(&edit, c, tcompaction_index);
@@ -2211,20 +2213,14 @@ Status DBImpl::DoSplitCompactionWork(Compaction* c) {
   DEBUG_T("-------------finish LogAndApply-----------\n\n");
   
   for(int i = 0; i < tcompactionlist.size(); i++) {
-      DEBUG_T("to delete tcompactionlist[%d]\n", i);
       delete tcompactionlist[i];
-      DEBUG_T("to clean up t compaction\n");
       CleanupCompaction(t_compactionstate_list[i]);
-      DEBUG_T("end clean up t compaction\n");
   }
 
 
 	for(int i = 0; i < p_sptcompactions.size(); i++) {
-    DEBUG_T("to delete p_sptcompactions[%d]\n", i);
 		delete p_sptcompactions[i];
-    DEBUG_T("to clean up p compaction\n");
     CleanupCompaction(p_compactionstate_list[i]);
-    DEBUG_T("end clean up p compaction\n");
   }
 
   DEBUG_T("-------------finish DoSplitCompactionWork-----------\n\n");
@@ -2365,30 +2361,34 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   SequenceNumber last_sequence_for_key = kMaxSequenceNumber;
 
   ///////////meggie
-  if(compact->compaction->level() == 0) {
-    fprintf(stderr, "before compaction：\n");
-    versions_->PrintLevel01();
-    fprintf(stderr, "compaction files:\n");
-    fprintf(stderr, "input0:\n");
-    for(int i = 0; i < compact->compaction->num_input_files(0); i++){
-      FileMetaData* fm = compact->compaction->input(0, i);
-      fprintf(stderr, "number:%llu, smallest:%s, largest:%s\n", fm->number, 
-            fm->smallest.user_key().ToString().c_str(),
-            fm->largest.user_key().ToString().c_str());
-    }
-    fprintf(stderr, "input1:\n");
-    for(int i = 0; i < compact->compaction->num_input_files(1); i++){
-      FileMetaData* fm = compact->compaction->input(1, i);
-      fprintf(stderr, "input1, number:%llu, smallest:%s, largest:%s\n", fm->number, 
-            fm->smallest.user_key().ToString().c_str(),
-            fm->largest.user_key().ToString().c_str());
-    }
-  }
+  // if(compact->compaction->level() == 0) {
+  //   DEBUG_T("before compaction:\n");
+  //   versions_->PrintLevel01();
+  //   DEBUG_T("compaction files:\n");
+  //   DEBUG_T("input0:\n");
+  //   for(int i = 0; i < compact->compaction->num_input_files(0); i++){
+  //     FileMetaData* fm = compact->compaction->input(0, i);
+  //     DEBUG_T("number:%llu, smallest:%s, largest:%s\n", fm->number, 
+  //           fm->smallest.user_key().ToString().c_str(),
+  //           fm->largest.user_key().ToString().c_str());
+  //   }
+  //   DEBUG_T("input1:\n");
+  //   for(int i = 0; i < compact->compaction->num_input_files(1); i++){
+  //     FileMetaData* fm = compact->compaction->input(1, i);
+  //     DEBUG_T("input1, number:%llu, smallest:%s, largest:%s\n", fm->number, 
+  //           fm->smallest.user_key().ToString().c_str(),
+  //           fm->largest.user_key().ToString().c_str());
+  //   }
+  // }
   //////////meggie
 
   for (; input->Valid() && !shutting_down_.Acquire_Load(); ) {
     // Prioritize immutable compaction work
-    if (has_imm_.NoBarrier_Load() != nullptr) {
+    ////////////meggie
+    //level0 bucket
+    //if (has_imm_.NoBarrier_Load() != nullptr) {
+    if (compact->compaction->level() != 0 && has_imm_.NoBarrier_Load() != nullptr) {
+    ///////////////////meggie
       const uint64_t imm_start = env_->NowMicros();
       mutex_.Lock();
       if (imm_ != nullptr) {
@@ -2453,11 +2453,6 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
         compact->compaction->IsBaseLevelForKey(ikey.user_key),
         (int)last_sequence_for_key, (int)compact->smallest_snapshot);
 #endif
-    /////////meggie
-    if(compact->compaction->input(0, 0)->number == 9) {
-      DEBUG_T("file number 9 iter, key:%s\n", ikey.user_key.ToString().c_str());  
-    }
-    /////////meggie
 
     if (!drop) {
       // Open output file if necessary
@@ -2475,14 +2470,6 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
 	    ////////////meggie
       // AddKeyToHyperLogLog(compact->current_output()->hll, key);
       // compact->current_output()->hll_add_count++;
-      
-      // if(ikey.user_key.ToString() == "user300027621834939088") {
-      //   DEBUG_T("compaction add user300027621834939088 key to level1 file number:%llu\n", compact->current_output()->number);
-      // }
-      if(ikey.user_key.ToString() == "user3000353751541317264") {
-        DEBUG_T("compaction add user3000353751541317264 key to level1 file number:%llu\n", compact->current_output()->number);
-      }
-   
 	    ////////////meggie
 
       // Close output file if it is big enough
@@ -2532,10 +2519,10 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
   }
 
   ///////////meggie
-  if(compact->compaction->level() == 0) {
-    fprintf(stderr, "after compaction：\n");
-    versions_->PrintLevel01();
-  }
+  // if(compact->compaction->level() == 0) {
+  //   DEBUG_T("after compaction:\n");
+  //   versions_->PrintLevel01();
+  // }
   //////////meggie
 
   record_timer(DO_COMPACTION_WORK);
@@ -3007,7 +2994,6 @@ Status DB::Open(const Options& options, const std::string& dbname,
   *dbptr = nullptr;
 
   /////////////meggie
-  DEBUG_T("to open dbimpl\n");
   DBImpl* impl = new DBImpl(options, dbname, dbname_nvm);
   /////////////meggie
   impl->mutex_.Lock();
@@ -3037,7 +3023,6 @@ Status DB::Open(const Options& options, const std::string& dbname,
     edit.SetPrevLogNumber(0);  // No older logs needed after recovery.
     edit.SetLogNumber(impl->logfile_number_);
     s = impl->versions_->LogAndApply(&edit, &impl->mutex_);
-    DEBUG_T("open, after log and apply\n");
   }
   if (s.ok()) {
     impl->DeleteObsoleteFiles();
@@ -3050,7 +3035,6 @@ Status DB::Open(const Options& options, const std::string& dbname,
   } else {
     delete impl;
   }
-  DEBUG_T("after open dbimpl\n");
   return s;
 }
 

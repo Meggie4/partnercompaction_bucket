@@ -167,6 +167,7 @@ class DBImpl : public DB {
   void UpdateLevel0File(VersionEdit* edit, MinorCompactionState* mcompact);
   static void SavePartnerMeta(void* args);
   void DealWithPartnerMeta(SinglePartnerTable* spt);
+  void TestPMIter(Iterator* iter);
   ///////////////meggie
 
   Status OpenCompactionOutputFile(CompactionState* compact);
